@@ -1,0 +1,20 @@
+---
+title: 'Ecology Workshop: Project Proposal'
+author: "Tommy Shannon"
+date: "1/10/2020"
+output: html_document
+---
+
+You want to create a one page proposal focused on your intended use of the approaches used in this course.Your one page proposal should include a 1 paragraph research statement,  your objectives, hypothesis, datasets, and statistical analysis
+
+I intend to analyze a phytoplankton dataset from a northern temperate lake to understand changes in species assemblage over a 10-year period with respect to changing environmental variables including ice cover. The purpose of this analysis is to establish a baseline historical pattern of seasonal species assemblage dynamics, for comparison to algal spp assemblages in response to currently ongoing whole-lake manipulation experiments of the same lake. 
+
+The dataset I'm working with is based on algal slides from Sparkling Lake, WI, which were originally collected from 1995-2008 with funding from the NTL-LTER program. I personally identified and enumerated those slides to create the dataset used for this analysis.
+ 
+ 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
