@@ -1,0 +1,295 @@
+---
+title: "Workshop 2_Nonlinear Models"
+author: "Sparkle L. Malone"
+date: "1/17/2020"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+
+### THE WHOLE CODE: REPORT BELOW
+
+load("~/Downloads/NLM_Workshop.RData")
+library(nlstools)
+
+# Plot the whole dataset for relevant variables to see general trends
+par(mai=c(1,1,0.1,0.1)) 
+plot( NEE ~ TA, data= night)
+plot( NEE ~ MONTH, data= night)
+plot( PAR ~ MONTH, data= night)
+plot( TA ~ MONTH, data= night)
+
+# From whole-dataset plots we can see no clear curves which we could fit a nonlinear regression to.
+# This is likely due to differing trends or data variation throughout the year. 
+# To see if this is true, we can plot individual months by subsetting:
+jan <- subset(night, MONTH == 1)
+feb <- subset(night, MONTH == 2)
+march <- subset(night, MONTH == 3)
+april <- subset(night, MONTH == 4)
+may <- subset(night, MONTH == 5)
+june <- subset(night, MONTH == 6)
+july <- subset(night, MONTH == 7)
+aug <- subset(night, MONTH == 8)
+sept <- subset(night, MONTH == 9)
+oct <- subset(night, MONTH == 10)
+nov <- subset(night, MONTH == 11)
+dec <- subset(night, MONTH == 12)
+
+plot( NEE ~ TA, data= jan)
+plot( NEE ~ TA, data= feb)
+plot( NEE ~ TA, data= april)
+plot( NEE ~ TA, data= may)
+plot( NEE ~ TA, data= june)
+plot( NEE ~ TA, data= july)
+plot( NEE ~ TA, data= aug)
+plot( NEE ~ TA, data= sept)
+plot( NEE ~ TA, data= oct)
+plot( NEE ~ TA, data= nov)
+plot( NEE ~ TA, data= dec)
+
+###Harvard Forest is a mixed temperate forest. 
+#We can see seasonal patterns in NEE in Figure 1. 
+#We want to quantify just how variable rates of NEE are annually. 
+#To do this we will fit light and temperature response curves monthly and compare parameter values.
+
+# Workflow:
+#  1. Create a dataframe to store month parameter values (parms.Month).
+#  2. Write a function to the fit model and extract paramters (nee.night).
+#  3. Write a loop to fit monthly curves and add parameters to a dataframe (parms.Month). 
+#  4. Bootstrapping for error estimation.
+
+# Selfstart for the trc:
+trcModel <- function(TA, a, b) {
+  y = a * exp(b * TA)
+  return(y)
+}
+
+trc.int <- function (mCall, LHS, data){
+  x <- data$TA
+  y <- data$NEE
+  
+  a <- 1.00703982 + -0.08089044 * (min(na.omit(y)))
+  b <- 0.051654 + 0.001400 * (min(na.omit(y)))
+  
+  value = list(a, b)
+  names(value) <- mCall[c("a", "b")]
+  return(value)
+}
+
+
+# Dataframe to store parameter values (parms.Month) parms and se
+parms.Month <- data.frame(
+  MONTH=numeric(),
+  a=numeric(),
+  b=numeric(),
+  a.pvalue=numeric(),
+  b.pvalue=numeric(),
+  stringsAsFactors=FALSE, row.names=NULL)
+
+parms.Month[1:12, 1] <- seq(1,12,1) # Adds months to the file
+
+
+# Write a function to fit the model and extract paramters (nee.night).
+nee.night <- function(dataframe){ y = nls( NEE ~ (a * exp(b * TA)), dataframe, 
+                        start=list(a= iv$a , b= iv$b),
+                        na.action=na.exclude, trace=F, 
+                        control=nls.control(warnOnly=T))
+
+### MAKE SURE the dataframe is called with the correct number of columns
+y.df <- as.data.frame(cbind(t(coef(summary(y)) [1:2, 1]), 
+                            t(coef(summary(y)) [1:2, 4]))) 
+names(y.df) <-c("a","b", "a.pvalue", "b.pvalue")
+return (y.df )}
+
+# Write a loop to fit monthly curves and add paramters to a dataframe (parms.Month).
+SS.trc <- selfStart(model=trcModel,initial = trc.int)
+
+for(j in unique(night$MONTH)){
+  # Determines starting values:
+  iv <- getInitial(NEE ~ SS.trc('TA', "a", "b"), 
+                   data = night[which(night$MONTH == j),])
+  
+  
+  # Fits temp response curve:
+  y3 <- try(nee.night(night[which(night$MONTH == j),]), silent=T) 
+  
+  # Extracts data and saves it in the dataframe
+  try(parms.Month[c(parms.Month$MONTH == j ), 2:5 ] <- cbind(y3), silent=T) 
+  print(y3)
+  rm(y3)
+  }
+
+parms.Month
+
+
+# Create file to store parms and se
+boot.NEE <- data.frame(parms.Month[, c("MONTH")]); names (boot.NEE) <- "MONTH" 
+boot.NEE$a.est <- 0
+boot.NEE$b.est<- 0
+boot.NEE$a.se<- 0
+boot.NEE$b.se<- 0
+
+
+for ( j in unique(boot.NEE$MONTH)){
+  
+  y1 <-night[which(night$MONTH == j),] # Subsets data
+  # Determines the starting values:
+  iv <- getInitial(NEE ~ SS.trc('TA', "a", "b"), data = y1)
+  # Fit curve:
+  night.fit <- nls(NEE ~ (a * exp(b * TA)), 
+                   data=y1, start=list(a= iv$a , b= iv$b),
+                  na.action=na.exclude, trace=F, 
+                  control=nls.control(warnOnly=T))
+ 
+  # Bootstrap and extract values:
+  try(results <- nlsBoot(night.fit, niter=100 ), silent=T) 
+  try(a <- t(results$estiboot)[1, 1:2], silent=T) 
+  try(names(a) <- c('a', 'b'), silent=T) 
+  try( b <- t(results$estiboot)[2, 1:2], silent=T) 
+  try(names(b) <- c('a', 'b'), silent=T) 
+  try(c <- t(data.frame(c(a,b))), silent=T)
+  
+  # Add bootstrap data to dataframe:
+  try(boot.NEE[c(boot.NEE$MONTH == j), 2:5] <- c[1, 1:4], silent=T) 
+  try(rm(night.fit, a, b, c, results, y1), silent=T)
+}
+trc <- merge( parms.Month, boot.NEE, by.x="MONTH", by.y="MONTH") # Merge dataframes
+trc
+
+
+
+# Plot that shit uuupp
+
+# Run model with self start values for a given month
+y4 = nls( NEE ~ (a * exp(b * TA)), night[which(night$MONTH == 11),], 
+         start=list(a= trc$a , b= trc$b),
+         na.action=na.exclude, trace=F, control=nls.control(warnOnly=T))
+summary(y4)
+
+res.trc.y4 <- nlsResiduals(y4)
+par(mfrow=c(2,2))
+plot(res.trc.y4, which=1) # Residulas vs fitted values (Constant Variance) 
+plot(res.trc.y4, which=3) # Standardized residuals
+plot(res.trc.y4, which=4) # Autocorrelation
+plot(res.trc.y4, which=5) # Histogram (Normality)
+
+# Run model with bootstrap approximated values for a given month
+y5 = nls( NEE ~ (a.est * exp(b.est * TA)), night[which(night$MONTH == 8),], 
+          start=list(a.est= trc$a.est , b.est= trc$b.est),
+          na.action=na.exclude, trace=F, control=nls.control(warnOnly=T))
+summary(y5)
+
+res.trc.y5 <- nlsResiduals(y5)
+par(mfrow=c(2,2))
+plot(res.trc.y5, which=1) # Residulas vs fitted values (Constant Variance) 
+plot(res.trc.y5, which=3) # Standardized residuals
+plot(res.trc.y5, which=4) # Autocorrelation
+plot(res.trc.y5, which=5) # Histogram (Normality)
+
+
+#This doesn't plot the line because the argument must be NULL or a character vector; 
+# extensive googling hasn't solved this, so I will resign here.
+
+
+
+```
+
+# Objectives
+The primary objective of this analysis is to fit monthly light and temperature response curves for Harvard forest to understand annual patterns, ecosystem photosynthetic potential, and respiration rates in temperate mixed forests.  
+
+This task additionally serves as an exposure to R workflow and nonlinear modeling.
+
+# Methods
+
+## Site Information 
+
+The Harvard Experimental Forest is a long-running ecological study site in Massachusetts which hosts both LTER and NEON observation networks, making it a prime source of rich environmental datasets. The climate is moist temperate, with temperatures from -7 to 20 C. The environment is predominately a transition hardwood forest, with Red oak, Red maple, Black birch, White pine, and Eastern hemlock dominating.  A map of the forest is included below:
+
+![Harvard Forest Map](/Users/tshan018/Desktop/HFmap.png)
+
+
+## Photosynthetic Potential
+
+To model the system's photosynthetic potential, a light response curve was generated with the Michaelis-Menton Approach, [NEE ~ (a1 * PAR * ax)/(a1 * PAR + ax) + r], using a nonlinear least-squares estimator to get a better approximation. To this end, the daytime dataset was initially directly processed using the nls() function and given self-start values. 
+
+When this produced poor residuals (res = 12.54), the selfStart() function was used to generate better starting values. These values were then used to seed the model, which then produced results with more acceptable residuals (res = 6.728).
+
+To estimate the error of this resulting model, it was bootstrapped for 100 iterations. Low standard error estimates (<0.34) resulted.
+
+
+## Ecosystem Respiration
+
+A similar but more complex approach was employed to model ecosystem respiration. A modified Arrhenius Equation [NEE ~ (a * exp(b * TA))] was used to create a best-fit trendline for the night data from the Harvard Forest dataset.  Initial whole-data graphing suggested that there was no unified trend for the whole dataset. Seasonal variations in NEE and air temperature (TA) indicate that there may be monthly trends. 
+
+```{r, echo=FALSE}
+# Plot the whole dataset for relevant variables to see general trends
+par(mai=c(1,1,0.1,0.1)) 
+plot( NEE ~ TA, data= night)
+plot( NEE ~ MONTH, data= night)
+plot( TA ~ MONTH, data= night)
+```
+
+To see if this was true, data was subset by month and plotted again.  The month with a clearest trend was November, while the month with most variability was August.
+
+```{r, echo=FALSE}
+plot( NEE ~ TA, data= nov, main = "November")
+plot( NEE ~ TA, data= aug, main = "August")
+```
+
+In order to account for this seasonal variance, iterations of the model were created for each month.  To do this, the data was stored by monthly parameters in a dataframe, then processed as loop iterations to find unique starting values and bootstrap error estimates of the model for each month.
+
+# Results (at least 1 plot and one table)
+
+```{r, echo=FALSE}
+trc
+```
+
+The table of a and b starting values and their p values, bootstrap estimated values, and bootstrap estimated standard error are above.  While it is silly to try to display a table of graphical output for all months, graphed residuals for the months with lowest and highest error estimates (November and March respectively) are provided below.
+
+```{r, echo=FALSE}
+summary(y4)
+
+res.trc.y4 <- nlsResiduals(y4)
+par(mfrow=c(2,2))
+plot(res.trc.y4, which=1) # Residulas vs fitted values (Constant Variance) 
+plot(res.trc.y4, which=3) # Standardized residuals
+plot(res.trc.y4, which=4) # Autocorrelation
+plot(res.trc.y4, which=5) # Histogram (Normality)
+```
+
+```{r, echo=FALSE}
+summary(y5)
+
+res.trc.y5 <- nlsResiduals(y5)
+par(mfrow=c(2,2))
+plot(res.trc.y5, which=1) # Residulas vs fitted values (Constant Variance) 
+plot(res.trc.y5, which=3) # Standardized residuals
+plot(res.trc.y5, which=4) # Autocorrelation
+plot(res.trc.y5, which=5) # Histogram (Normality)y)
+```
+
+# Discussion 
+
+Initial issues with the model and dataset (poor model fit, variability of trend between months) was overcome by subsetting the data by each month. Once this was done, patterns of within predicted starting values and estimated error for each month indicated that the model works best for winter months and poorest for summer months. This is likely due to the influence of increased photosynthesis and productivity during the summer months leading to increased variability in respiration rates for the same time period.  
+
+Something which should be noted is that at the end of this assignment I attempted to re-plot the monthly results, incorporating the modeled best-fit line into the graph. I was unsuccessful in doing so, and recieved an error that x and y lengths were unequal.  For the rest of the exercize this issue was overcome by using an na.omit() command to ignore missing data points, but that seemed to not work within the plot.  My attempted code is below.
+
+```
+library(ggplot2)
+ggplot(nov, aes(TA, NEE)) + 
+  geom_point() + 
+  geom_smooth(method = "nls", 
+              method.args = list(formula = NEE ~ (a * exp(b * TA)), 
+                                 start=list(a= trc$a , b= trc$b),
+                                 na.action=na.exclude, trace=F, control=nls.control(warnOnly=T)), 
+              data = nov,
+              se = FALSE)
+```
