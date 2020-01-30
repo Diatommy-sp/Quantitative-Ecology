@@ -1,0 +1,258 @@
+---
+title: "Workshop 3_Timeseries Models"
+author: "Tommy Shannon"
+date: "1/31/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+
+load("/Users/tshan018/Downloads/ARIMA_Workshop.RData")
+library(zoo) 
+library(tseries) 
+library(forecast) 
+library(xts)
+
+# specify periodicity of the data, i.e., number of observations per period
+#We have 30 observations per month. (1 per day)
+nee <- ts( mangroves$nee, start= 1, frequency=30)
+
+# Plot the data to visualize it
+### mai() specifies the whitespace around your plots. goes bottom, left, top, right
+par(mfrow=c(1,1), mai=c(1.25,0.8,0.1, 0.1)) 
+plot( nee, typ="l", col="red", ylab= "NEE", xlab="")
+
+# Remove time outliers
+plot(nee)
+lines(tsclean(nee), col="black")
+
+nee <- tsclean(nee)
+
+#Time series analysis involves trying to separate the time series into the seasonal, 
+#trend and irregular components. Deconstructing the series will help you understand its behavior 
+#and prepare a foundation for building an ARIMA model.
+
+#The Seasonal component refers to fluctuations in the data related to calendar cycles. 
+#Usually, seasonality is fixed at some number; for instance, quarter or month of the year.
+
+#Trend component is the overall pattern of the series. 
+#It consists of decreasing or increasing patterns that are not seasonal. 
+
+#This is estimated using moving averages.
+#The part of the series that can’t be attributed to the seasonal or trend components 
+#is referred to as residual or error.
+
+nee.d <- decompose(nee, 'multiplicative') 
+plot(nee.d)
+
+# p-value < 0.05 indicates the TS is stationary (time invariant to mean, variance, and autocovariance)
+adf.test(nee )
+
+
+# Testing for Autocorrelation (acf = autocorrelation plots)
+# We want to identify autocorrelation, then get RID of it, wo we're left with true trends.
+
+# 95% sig boundaries are blue dotted lines
+acf(nee, lag.max=45)
+
+# a partial acf reduces the carry-over correlation from early lags
+pacf(nee, lag.max=45)
+
+#### Fitting an ARIMA model
+# Generates optimal (p, d, q) values:
+#p: The number of lag observations included in the model (lag order).
+#d: The number of times that the raw observations are differenced (the degree of differencing).
+#q: The size of the moving average window (moving average)
+
+arima.nee1 <-auto.arima(nee, trace=TRUE)
+
+# Now, to see if the model output is legit, look at its residuals
+# We want residuals to look like white noise- this would mean they're normally distributed.
+#ACF spikes outside the blue lines indicate some autocorrelation is still present at those points.
+tsdisplay(residuals(arima.nee1), lag.max=45)
+# the acf / pacf autocorrelation spikes at lag 10 ( and residuals crunch at 10) 
+# This means we have a time pattern still. 
+# This suggests that our model may be better off with a different specification, like p = 10 or q = 10.
+
+# Repeat the fitting process allowing for the MA(10 or 35) component & examine diagnostic plots again.
+### THIS STEP TAKES THE COMPUTER A WHILE TO RUN
+arima.nee2 <-arima(nee , order=c(10,1,3), seasonal= list(order=c(2,0,2)))
+
+tsdisplay(residuals(arima.nee2), lag.max= 30)
+
+# To compare models, use AIC. We also want to compare observed vs predicted values
+### We want to MINIMIZE AIC. if the new model has a higher AIC, it didn't improve.
+AIC(arima.nee1, arima.nee2)
+
+par(mfrow=c(1,1))
+plot(nee , typ="l"); lines(fitted(arima.nee2),col="red")
+
+# Liung-Box Test for overall randomness
+# Measuring for significant difference from white noise.
+# You need a p-value greater than 0.05!
+checkresiduals(arima.nee2, lag=36)
+
+#plot it
+par(mfrow=c(1,1))
+plot(nee , typ="l"); lines(fitted(arima.nee2),col="red")
+
+# Now we can forecast our model into the future. 
+# Here, we do that for 30 timesteps (days)
+plot(forecast(arima.nee2, h=30))
+
+
+### EVALUATE POTENTIAL DRIVERS OF NEE
+#1. Create timeseries objects.
+#2. Decompose the time series.
+#3. Test for stationarity and detecting autocorrelation.
+#4. Explore correlations.
+#5. Compare models with and without explanatory drivers.
+
+#1. Create timeseries objects.
+sal <- ts(mangroves$salinity.max, start= 1, frequency=30)
+# visualize the data
+par(mfrow=c(1,1), mai=c(1.25,0.8,0.1, 0.1)) 
+plot(sal , typ="l", ylab= "Salinity", xlab="", col="red")
+# Throw out outliers that could throw off the model
+plot(sal , typ="l", ylab= "Salinity", xlab="") 
+lines(tsclean(sal) , col="black")
+
+sal.clean <- tsclean(sal)
+
+#2. Decompose the model
+sal.d <- decompose(sal.clean, 'multiplicative') 
+plot(sal.d)
+
+#3. Test for stationarity
+# p-value < 0.05 indicates the TS is stationary
+adf.test(sal)
+# Not good enough.  We can try differncing the series with the function diff()
+adf.test(diff(sal))
+# That works.
+
+#4. Explore Correlations
+#Look for significant lags
+ccf( diff(sal),nee, na.action = na.pass, lag.max=40, plot=TRUE)
+
+#5. Explore nmodels of NEE
+arima.nee3 <-auto.arima(nee, xreg=c(diff(sal),0), trace=TRUE)
+
+#compare to current model
+AIC(arima.nee2, arima.nee3 )
+# Not a better model. Let's try to look at extreme salinity only.
+# Let's create a salinity index to ID when salinity values are greater than 25n ppt.
+sal.i <- sal.clean 
+sal.i[sal.i < 25 ]<- 0 
+sal.i[sal.i >= 25 ]<- 1
+plot(sal.i)   
+par(mfrow=c(1,1), mai=c(1.25,0.8,0.1, 0.1)) #this fixes the plot so it fits the screen
+
+#Now try adding the extreme salinity indicator into the model to see if this is an improvement:
+arima.nee4 <-auto.arima(nee, xreg=sal.i, trace=TRUE)
+#Compare
+AIC(arima.nee2,arima.nee4 )
+checkresiduals(arima.nee4, lag=36) #U want p > 0.05!
+#Plot it up
+par(mfrow=c(1,1))
+plot(nee , typ="l"); 
+lines(fitted(arima.nee4),col="red")
+#nice.
+
+
+###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+###CHALLENGE
+
+#Make a better one.
+t.air <- ts(mangroves$tair, start= 1, frequency=30)
+# visualize the data
+par(mfrow=c(1,1), mai=c(1.25,0.8,0.1, 0.1)) 
+plot(t.air, typ="l", ylab= "Air temperature", xlab="", col="red")
+# Throw out outliers that could throw off the model
+plot(t.air, typ="l", ylab= "Air temperature", xlab="") 
+lines(tsclean(t.air) , col="black")
+
+tair.clean <- tsclean(t.air)
+
+#2. Decompose the model
+tair.d <- decompose(tair.clean, 'multiplicative') 
+plot(tair.d)
+
+#3. Test for stationarity
+# p-value < 0.05 indicates the TS is stationary
+adf.test(tair.clean)
+# Not good enough.  We can try differncing the series with the function diff()
+adf.test(diff(tair.clean))
+# That works.
+
+#4. Explore Correlations
+#Look for significant lags
+ccf( diff(tair.clean),nee, na.action = na.pass, lag.max=40, plot=TRUE)
+
+#5. Explore nmodels of NEE
+arima.nee.tair <-auto.arima(nee, xreg=c(diff(tair.clean),0), trace=TRUE)
+
+#compare to salt and base models
+AIC(arima.nee1, arima.nee.tair)
+AIC(arima.nee2, arima.nee.tair)
+#niiiice
+checkresiduals(arima.nee.tair, lag=36)
+#Plot it up
+par(mfrow=c(1,1))
+plot(nee , typ="l"); 
+lines(fitted(arima.nee.tair),col="red")
+
+```
+
+# Objectives
+The primary objectives of this analysis are to find and normalize autocorrelation patterns within time series data, and to develop a best-fit model for NEE within the Everglades mangroves, given a suite of variables to draw from, using an ARIMA model. 
+
+# Methods
+
+## Site Information 
+The site, TS/Ph-7, is an FCE-LTER monitoring site within the mangrove scrub of the Florida Everglades. The Everglades recieves its water from on-site and upstate rainfall, and so experiences seasonal high and low water levels associated with the yearly wet and dry seasons. Other seasonal fluctuations including temperature, cloud cover, and water ion concentration influence the year-round productivity the site experiences.  NEE and associated variables were measured with an EDDIE flux covariance tower. 
+
+```{r, out.width = "400px", echo=FALSE}
+knitr::include_graphics("/Users/tshan018/Desktop/EverManMap.png")
+```
+
+
+## Statistical Analysis
+To create a base model, outlier-cleaned NEE timeseries data was tested for stationarity and assessed for autocorrelation. The acf() and pacf() functions indicated significant autocorrelation, so the timeseries was fit to an ARIMA model to account for the recurring patterns. The autofit ARIMA still displayed significant autocorrelation at lag 10, so the model parameters (p, d, q) were adjusted to account for that, resulting in a model without significant autocorrelation.
+
+The challenge for this assignment was to create a better model than the base model or the model provided, which used salinity data to better estimate NEE. I chose to use air temperature to fit a better ARIMA model; this will be discussed more in the Discussion. Like NEE data, the air temperature data was put into a timeseries object, cleaned for outliers, and tested for stationarity.  The data was then fed into an ARIMA model along with the original NEE data, and the resulting model's AIC was compared to the original model and salinity model. Residuals and model output were plotted.
+
+# Results
+
+```{r, echo=FALSE}
+#compare to salt and base models
+AIC(arima.nee1, arima.nee.tair)
+AIC(arima.nee2, arima.nee.tair)
+```
+The AIC of the air temperature model "arima.nee.tair" is compared to the base AMRIMA model "arima.nee.1" and the salinity model "arima.nee.2".
+
+```{r, echo=FALSE}
+#Plot it up
+par(mfrow=c(1,1))
+plot(nee , typ="l"); 
+lines(fitted(arima.nee.tair),col="red")
+```
+
+The actual NEE data (black) is plotted along with the air temperature ARIMA model for NEE (red) over time.
+
+# Discussion
+My ARIMA model which incorporated air temperature strongly out-performed both the base and salinity models, with an AIC of 661 compared to their AIC of 706 and 704 respectively.  In my conversations with other classmates who used other variables, air temperature also seemed to generate a lower AIC than water temperature and PAR. This makes sense to me; air temperature directly moderates metabolic processes and enzyme activity which regulate CO2 uptake / respiration, and air temperature also likely indirectly drives NEE by way of its correlation with variables like moisture, cloud cover, and growing season.  
+
+I believe that an ARIMA model which includes both air temperature and PAR data may generate an even better model of NEE with a lower AIC, but I didn't trust that my laptop would be able to handle processing that model. 
+
+
+
+
+
+
+
+
+
+
