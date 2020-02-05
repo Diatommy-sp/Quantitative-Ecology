@@ -1,0 +1,207 @@
+---
+title: "Workshop 4 Species Distribution Model"
+author: "Tommy Shannon"
+date: "1/31/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+
+#THE ACTUAL CODE
+
+
+# Species distribution modeling for saguaro
+# Jeff Oliver
+# jcoliver@email.arizona.edu
+# 2018-02-27
+
+rm(list = ls())
+
+# Load additional packages
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+
+# Use the bioclim data files for sampling resolution
+bioclim.data <- getData(name = "worldclim",
+                        var = "bio",
+                        res = 2.5,
+                        path = "/Users/tshan018/Downloads/")
+
+
+# Read in saguaro observations
+obs.data <- read.csv(file = "/Users/tshan018/Downloads/SDM_Data.csv")
+
+# Drop any rows with NAs
+obs.data <- obs.data[!is.na(obs.data$latitude), ]
+
+# Only pull out those columns of interest and in the order we want them
+obs.data <- obs.data[, c("longitude", "latitude")]
+
+# Determine geographic extent of our data
+max.lat = ceiling(max(obs.data$latitude))
+min.lat = floor(min(obs.data$latitude))
+max.lon = ceiling(max(obs.data$longitude))
+min.lon = floor(min(obs.data$longitude))
+geographic.extent <- extent(x = c(min.lon, max.lon, min.lat, max.lat))
+
+# Crop the bioclim data to geographic extent of saguaro
+bioclim.data <- crop(x = bioclim.data, y = geographic.extent)
+
+# Create pseudo-absence, or background, points
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "data/wc2-5", 
+                        pattern = "*.bil$", 
+                        full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Randomly sample points (same number as our observed points)
+background <- randomPoints(mask = mask,     # Provides resolution of sampling points
+                           n = nrow(obs.data),      # Number of random points
+                           ext = geographic.extent, # Spatially restricts sampling
+                           extf = 1.25)             # Expands sampling a little bit
+
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+group.presence <- kfold(x = obs.data, k = 5) # kfold is in dismo package
+
+# Separate observations into training and testing groups
+presence.train <- obs.data[group.presence != testing.group, ]
+presence.test <- obs.data[group.presence == testing.group, ]
+
+# Repeat the process for pseudo-absence points
+group.background <- kfold(x = background, k = 5)
+background.train <- background[group.background != testing.group, ]
+background.test <- background[group.background == testing.group, ]
+
+# Build a model using training data
+bc.model <- bioclim(x = bioclim.data, p = presence.train)
+
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data, 
+                                   ext = geographic.extent)
+
+# Use testing data for model evaluation
+bc.eval <- evaluate(p = presence.test,   # The presence testing data
+                    a = background.test, # The absence testing data
+                    model = bc.model,    # The model we are evaluating
+                    x = bioclim.data)    # Climatic variables for use by model
+
+# Determine minimum threshold for "presence"
+bc.threshold <- threshold(x = bc.eval, stat = "spec_sens")
+
+# Load map data for plotting
+data(wrld_simpl)
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+points(x = obs.data$longitude, 
+       y = obs.data$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.6)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+box()
+
+```
+
+# Methods
+
+## Species Information 
+The Saguaro cactus, Carnegiea gigantia, is endemic to the Sonoran Desert which spans much of Southwestern New Mexico and part of Northwestern Mexico. The Saguaro is adapted to hot dry conditions, and can internally retain water for use between rain events.  The cactuses are massive, weighing ~4,000 lbs when full and growing up to a maximim of 78 feet. 
+
+
+```{r, out.width = "250px", echo=FALSE}
+knitr::include_graphics("/Users/tshan018/Desktop/Sauguaro.png")
+```
+
+(Photo from Wikipedia)
+
+## Statistical Analysis
+Surveyed data on Saguaro cactus distribution was used in conjunction with information on regional environmental conditions to supply data for the BIOCLIM "climate-envelope" model.  20% of the sampled distribution data was used to train the model, and randomly sampled pseudo-absence points were used in lieu of available true absence data.  
+
+# Results
+The model did a good job of predicting saguaro geographic range; all but three of the observation points fall within the predicted range, and none of the points fall far outside of the predicted range (Fig. 1).  Moreover, the mapped model results closely mirror the actual species distribution (Fig. 2). 
+
+No data table has been included because there were not any data tables generated from this model which seemed appropriate to report; model output was visual and map-based, not a statistical analysis.
+
+
+```{r, echo=FALSE}
+#Plot it up
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+points(x = obs.data$longitude, 
+       y = obs.data$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.6)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+box()
+```
+
+Fig. 1:  Predicted distribution of the Saguaro cactus (green) using the BIOCLIM model closely follows the sampled distribution of saguaros (+ marks)
+
+
+
+```{r, out.width = "400px", echo=FALSE}
+knitr::include_graphics("/Users/tshan018/Desktop/Saguaro.map.png")
+```
+
+Fig. 2: Actual distribution of Saguaro cactus (Wikipedia)
+
+
+
+# Discussion
+The saguaro cactus grows in a rather small and specific range within the Sonoran desert; it is likely that the cactus only does well under low-nutrient desert conditions and may be out-competed or culled by unfavorable temperatures outside of that range. Because its distribution is small and specific, its preferred environmental conditions are likely strict.  Desert conditions are rather well delineated, making the saguaro a good model organism for this sort of climate-envelope model. 
+
+Some areas of the actual saguaro distribution were not predicted by the model; this may have been because the model's presence point data seems to be all geographically clustered in one area, which may have biased the environmental heuristic of the model. There were no positive presence points located in any of these missing areas either, so the model may have not had sufficient representation for those location's variant of climate conditions to predict that they should be there.
+
+
+
+
+
+
+
+.
+
+
+
+
