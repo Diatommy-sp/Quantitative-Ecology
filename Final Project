@@ -1,0 +1,1094 @@
+---
+title: "Quantitative Ecology Final Project: CERP Species Response and Spatial Model"
+author: "Tommy Shannon"
+date: "4/2/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+
+setwd("/Users/tshan018/Documents/CERP Analysis")
+library(tidyverse)
+library(e1071)
+library(broom)
+#library(conflicted) ###DO NOT RUN THIS LINE WHEN KNITTING
+
+peri <- read.csv("CERP_diatoms_abundance_all_years_joined_for_tommy_2020_03_23_2.csv", 
+                  na.strings = "-9999")
+                  # Note: soil depth above 1m is labeled "-9999" and will read in as NA
+
+episode.converter <- read.csv("episode.converter.csv")
+
+### notes for below:
+# "%>%" is a pipe. It takes in whatever is before it and applies the command after it.
+# This can be chained into a series of pipes, and the final output is applied to the 
+# variable you're assigniong to the top command of the chain (here ep.rank).
+
+# pivot_longer takes all the spp columns and turns them into rows, with the columns being 
+# things in -c(). The spp names and values are assigned to new columns, which are assigned new names.
+
+# Here, I need to filter the data so that only site locations which are sampled for at least
+# 12 episodes are counted:
+
+PSUdf <- peri %>%
+  group_by(PRIMARY_SAMPLING_UNIT) %>%
+  summarise(no_rows=length(PRIMARY_SAMPLING_UNIT)) %>% # makes a new df with only PSU and # times occur
+  filter(no_rows >= 12) # Subsets only the data for which no_rows is greater than 12
+  
+peri.ranked <- peri %>%
+  filter(PRIMARY_SAMPLING_UNIT %in% PSUdf$PRIMARY_SAMPLING_UNIT) %>%
+  left_join(., episode.converter, by="EPISODE") %>%
+  select(episode.ranked, 
+         everything())
+  # %in% checks if a df has certain values that are the same in another df. 
+  # Here, filter(X %in% Y) takes only the data from the main df, peri, that are also in the PSUdf 
+
+
+#Now I need to extract the most abundant spp for each year and see how their abundances change over time
+
+ep.rank <- peri.ranked %>%
+  select(episode.ranked, TAG_ID, EPISODE,
+         ACBREBRE:UNKNVALV) %>% #Creates a dataframe with only the tagID, episode, and all 
+                                #columns between the specified ones (all the spp of diatoms)
+  pivot_longer(-c(TAG_ID, EPISODE, episode.ranked), names_to = "species", values_to = "abundance") %>%
+  group_by(episode.ranked, species) %>% #Groups the species by episode
+  summarise(Mean.spp = mean(abundance)) %>% #Creates a new table where it 
+                                            #replaces all the abundances with a mean abundance
+                                            #and drops TAG_ID
+  mutate(rank = order(order(Mean.spp, decreasing=TRUE))) %>% #Adds a column that ranks the Mean.spp
+  filter(rank <= 15) #Takes only the top 15 ranked spp for each episode
+
+
+# Here, I plot % abundance of some of the most abundant spp over time (as measured by episode.ranked)
+par(mfrow=c(1,1))
+
+M.calcarea <- filter(ep.rank, species == "MACALCAL")
+
+ggplot(M.calcarea, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Mastogloia Proportional Abundance", 
+       y="Mastogloia % Abundance", x="Sampling Episode")
+
+#Is all M. calcarea data normally distributed? (no).
+plot(density(peri.ranked$MACALCAL), main="Density Plot: M. calcarea % abundance", 
+     ylab="Frequency", sub=paste("Skewness:", 
+      round(e1071::skewness(peri.ranked$MACALCAL), 2)))  # density plot for 'speed'
+polygon(density(peri.ranked$MACALCAL), col="red")
+
+#Is the average yearly abundance normally distributed? (yes, so we can get away with running an lm)
+plot(density(M.calcarea$Mean.spp), main="Density Plot: M. calcarea average yearly % abundance", 
+     ylab="Frequency", sub=paste("Skewness:", 
+                                 round(e1071::skewness(M.calcarea$Mean.spp), 2)))  # density plot for 'speed'
+polygon(density(M.calcarea$Mean.spp), col="red")
+
+lm.M <- lm(Mean.spp ~ episode.ranked, data=M.calcarea)
+summary(lm.M)
+
+E.spp <- filter(ep.rank, species == "ENEVEEVE")
+
+ggplot(E.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Encyonema Proportional Abundance", 
+       y="Encyonema % Abundance", x="Sampling Episode")
+
+lm.E <- lm(Mean.spp ~ episode.ranked, data=E.spp)
+summary(lm.E)
+
+B.spp <- filter(ep.rank, species == "BRMICMIC")
+
+ggplot(B.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Brachysira Proportional Abundance", 
+       y="Brachysira % Abundance", x="Sampling Episode")
+
+lm.B <- lm(Mean.spp ~ episode.ranked, data=B.spp)
+summary(lm.B)
+
+F.spp <- filter(ep.rank, species == "FASYNSYN")
+
+ggplot(F.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Fallacia Proportional Abundance", 
+       y="Fallacia % Abundance", x="Sampling Episode")
+
+lm.F <- lm(Mean.spp ~ episode.ranked, data=F.spp)
+summary(lm.F)
+
+#For the goddamn life of me, I cannot figure out how to bring the summary statistics adj-R2 and p-val
+#from each of the lm models into one df or table. 
+#I've created and imported that info from a new Excel I made.
+
+lm.results <- read.csv("CERP.peri.lm.output.csv")
+lm.results
+
+
+### OK, now I need to start finding spp which have the tightest correlations with enviro variables
+
+# Multiple Linear Regression Example
+spp.regression <- lm(SURFACE_WATER_COND_US_PER_CM ~ MACALCAL + ENEVEEVE + BRMICMIC + FASYNSYN,
+                     data=peri.ranked)
+summary(spp.regression) # show results
+# plot it up
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
+plot(spp.regression)
+
+# For only Mastagloia
+M.cal.regression <- lm(SURFACE_WATER_COND_US_PER_CM ~ MACALCAL,
+                     data=peri.ranked)
+summary(M.cal.regression) # show results
+# plot it up
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
+plot(M.cal.regression)
+
+
+# ok that makes no sense to me, and probably isn't the right statistical test to perform here.
+# Let's run single regressions for the abundant taxa separately.
+
+##CONDUCTIVITY
+# Mastogloia vs conductivity:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point() + ylim(0, 100) + xlim(0, 1000)
+#and with color by region:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+# Now broken down by region:
+lox <- filter(peri.ranked, REGION == "LOX")
+srs <- filter(peri.ranked, REGION == "SRS")
+tsl <- filter(peri.ranked, REGION == "TSL")
+wc2 <- filter(peri.ranked, REGION == "WC2")
+wc3 <- filter(peri.ranked, REGION == "WC3")
+
+ggplot(lox, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes()) + ylim(0, 100) + xlim(0, 1000)
+
+ggplot(srs, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes()) + ylim(0, 100) + xlim(0, 1000)
+
+ggplot(tsl, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes()) + ylim(0, 100) + xlim(0, 1000)
+
+ggplot(wc2, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes()) + ylim(0, 100) + xlim(0, 1000)
+
+ggplot(wc3, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes()) + ylim(0, 100) + xlim(0, 1000)
+# Note: SRS, WC3, and TSL all share very similar distribution patterns, lumped near250-500 uS.
+# LOX are all nearly zero abundance and clumped below 100 uS, and 
+# WC2 are widespread over a wide range of both, but are never 0 for either axis.
+
+# Encyonema vs conductivity:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=ENEVEEVE)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=ENEVEEVE)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# B.spp vs cond
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=BRMICMIC)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=BRMICMIC)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# F.spp vs cond
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=FASYNSYN)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=FASYNSYN)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+
+# plot of soil depth vs water conductivity 
+ggplot(peri.ranked, aes(x=SOIL_DEPTH_CM, y=SURFACE_WATER_COND_US_PER_CM)) +
+  geom_point() + geom_smooth(method="lm") + ylim(0, 1000)
+
+
+## PHSOPHORUS
+# Mastogloia vs P:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=MACALCAL)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# Encyonema vs P:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=ENEVEEVE)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=ENEVEEVE)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# B.spp vs P
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=BRMICMIC)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=BRMICMIC)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# F.spp vs P
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=FASYNSYN)) +
+  geom_point() + ylim(0, 100) + xlim(0, 4000)
+# Same thing, zoomed in:
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=FASYNSYN)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000)
+
+# plot of soil depth vs P 
+ggplot(peri.ranked, aes(x=SOIL_DEPTH_CM, y=PERI_TP_UG_PER_G_DRY)) +
+  geom_point(aes(colour = factor(REGION))) + geom_smooth(method="lm") + ylim(0, 1000)
+
+
+### pH
+
+# Mastagloia
+ggplot(peri.ranked, aes(x=SURFACE_WATER_PH, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(4.5, 9)
+
+# Encyonema
+ggplot(peri.ranked, aes(x=SURFACE_WATER_PH, y=ENEVEEVE)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(4.5, 9)
+
+
+```
+
+
+```{r, include=FALSE}
+
+###PART TWO, MAP AND MODEL CREATION
+
+#Tommy Shannon
+#This analysis is based on a walk-through tutorial with more and better explanation:
+# https://jcoliver.github.io/learn-r/011-species-distribution-models.html
+
+setwd("/Users/tshan018/Documents/CERP Analysis")
+library(tidyverse)
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+
+bioclim.data <- getData(name = "worldclim",
+                        var = "bio",
+                        res = 2.5,
+                        path = "/Users/tshan018/Downloads/")
+
+# Read in peri data, filter out the infrequently sampled sites and sites without location data
+peri <- read.csv("CERP_diatoms_abundance_all_years_joined_for_tommy_2020_03_23_2.csv", 
+                 na.strings = "-9999")
+PSUdf <- peri %>%
+  group_by(PRIMARY_SAMPLING_UNIT) %>%
+  summarise(no_rows=length(PRIMARY_SAMPLING_UNIT)) %>% # makes a new df with only PSU and # times occur
+  filter(no_rows >= 12) # Subsets only the data for which no_rows is greater than 12
+
+#Subsets the peri df with only the values present in PSUdf
+peri.filtered <- peri %>%
+  filter(PRIMARY_SAMPLING_UNIT %in% PSUdf$PRIMARY_SAMPLING_UNIT) %>%  
+  filter(EASTING_UTM_XXXXXX != "na")  #Gets rid of rows with no location information
+
+#Deals with the NA values in the coordinates
+#peri.filtered <- peri.filtered[!is.na(peri.filtered$latitude), ]
+
+# Convert UTM points to Lat-Long coordinates
+#create UTM matrix
+utms <- SpatialPoints(peri.filtered[, c("EASTING_UTM_XXXXXX", "NORTHING_UTM_XXXXXXX")], 
+                      proj4string=CRS("+proj=utm +zone=17")) #You gotta specify the UTM zone you're in.
+                                                             #Everglades is in UTM zone 17.
+longlats <- spTransform(utms, CRS("+proj=longlat")) # Swap it to lat/long
+summary(longlats)
+
+coord.df <- as.data.frame(longlats@coords) %>% #Makes it read the longlats conversion as a dataframe
+  rename(longitude = EASTING_UTM_XXXXXX, latitude = NORTHING_UTM_XXXXXXX) #Renames the columns
+peri.filtered <- cbind(peri.filtered, coord.df) %>% #Adds the new columns to the main file
+  mutate(MACALCAL.presence = if_else(MACALCAL > 0, 1, 0)) #Adds a column indicating MACALCAL presence
+# or absence as a binary 1 / 0 (the syntax is, IF spp abundance > 0, count as 1, otherwise, count as 0)
+
+
+# Determine geographic extent of our data
+max.lat <- ceiling(max(peri.filtered$latitude))
+min.lat <- floor(min(peri.filtered$latitude))
+max.lon <- ceiling(max(peri.filtered$longitude))
+min.lon <- floor(min(peri.filtered$longitude))
+geographic.extent <- extent(x = c(min.lon, max.lon, min.lat, max.lat))
+
+# Load the data to use for our base map
+data(wrld_simpl)
+
+# Plot the base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Add the points for individual observation
+points(x = peri.filtered$longitude, 
+       y = peri.filtered$latitude, 
+       col = "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+# And draw a little box around the graph
+box()
+
+# Crop bioclim data to geographic extent of peri
+bioclim.data <- crop(x = bioclim.data, y = geographic.extent)
+
+# Drop unused columns
+#Note that LONG comes before LAT for this to work right
+peri.filtered.xy <- peri.filtered[, c("longitude", "latitude")] 
+
+# Build species distribution model
+bc.model <- bioclim(x = bioclim.data, p = peri.filtered.xy)
+
+head(peri.filtered.xy)
+
+# Build species distribution model
+bc.model <- bioclim(x = bioclim.data, p = peri.filtered.xy)
+
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Add model probabilities
+plot(predict.presence, add = TRUE)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+
+# Add original observations
+points(peri.filtered.xy$longitude, peri.filtered.xy$latitude, col = "olivedrab", pch = 20, cex = 0.75)
+box()
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~BEGIN YEARLY TRENDS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Now, I need to start subsetting the data to represent individual spp and years.
+# The following shows the spatial changes in % abundance of Mastogloia calcarea over sampling years.
+
+rbPal <- colorRampPalette(c('red','blue')) #This adds a column of color values for % abundance
+peri.filtered$Col <- rbPal(9)[as.numeric(cut(peri.filtered$MACALCAL,breaks = 9))] 
+                              #Assigns color based on % abundance of the whole data range.
+                             #I do 9 breaks since my overall % abundance is from 0% to 91%,
+                              #so each color shade represents ~10% abundance
+color.df <- subset(peri.filtered, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col))
+                                       #Lets you look at color cutoff values and the important columns
+
+#EP3 (first episode, and most overall abundant episode for MACALCAL)
+ep3 <- filter(peri.filtered, EPISODE == "3") 
+ep3.xy <- ep3[, c("longitude", "latitude")] 
+#You can test the validity of the model by looking at the following:
+color.ep3 <- subset(ep3, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col))
+#plot(ep3$MACALCAL, ep3$MACALCAL, col = ep3$Col, pch = 20, cex = 0.75)
+                                  
+ep3.model <- bioclim(x = bioclim.data, p = ep3.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2005")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep3.xy$longitude, ep3.xy$latitude, col = ep3$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                               "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+#The below graph shows the colors correctly corresponding linearly to the % abundance:
+#plot(ep3$MACALCAL, ep3$MACALCAL, col = ep3$Col, pch = 20, cex = 0.75)
+#NOTE that this also highlights that the color gradient does not go from 0% to 100%,
+  #it goes from lowest to highest value and considers that highest value 10/10 on its color gradient.
+  #SO, the colors are currently nonrepresentative of actual % abundance, and so
+  #graphs are not quantitatively comparable accross years.
+###NOTE: this is NOT fixed by using "peri.filtered$Col" rather than individual episode ranges.
+###NOTE: This IS fixed by subsetting each episode AFTER adding Col to peri.filtered 
+  #with "peri.filtered$Col", then calling color for each episode with "epXX$Col"
+  #For this to work, I CANNOT do epXX$Col  <- rbPal(10)[as.numeric(cut(epXX$MACALCAL, breaks = 10))]
+  #in each model. Just subset epXX from the whole peri.filtered, then call it as col = epXX$Col.
+
+##EP6
+ep6 <- filter(peri.filtered, EPISODE == "6")
+ep6.xy <- ep6[, c("longitude", "latitude")] 
+#You can test the validity of the model by looking at the following:
+color.ep6 <- subset(ep6, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col))
+#plot(ep6$MACALCAL, ep6$MACALCAL, col = ep6$Col, pch = 20, cex = 0.75)
+
+ep6.model <- bioclim(x = bioclim.data, p = ep6.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2006")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep6.xy$longitude, ep6.xy$latitude, col = ep6$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP9
+ep9 <- filter(peri.filtered, EPISODE == "9")
+ep9.xy <- ep9[, c("longitude", "latitude")] 
+color.ep9 <- subset(ep9, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep9$MACALCAL, ep9$MACALCAL, col = ep9$Col, pch = 20, cex = 0.75)
+
+ep9.model <- bioclim(x = bioclim.data, p = ep9.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2007")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep9.xy$longitude, ep9.xy$latitude, col = ep9$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP12
+ep12 <- filter(peri.filtered, EPISODE == "12")
+ep12.xy <- ep12[, c("longitude", "latitude")] 
+color.ep12 <- subset(ep12, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep12$MACALCAL, ep12$MACALCAL, col = ep12$Col, pch = 20, cex = 0.75)
+
+ep12.model <- bioclim(x = bioclim.data, p = ep12.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2008")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep12.xy$longitude, ep12.xy$latitude, col = ep12$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP15
+ep15 <- filter(peri.filtered, EPISODE == "15")
+ep15.xy <- ep15[, c("longitude", "latitude")] 
+color.ep15 <- subset(ep15, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep15$MACALCAL, ep15$MACALCAL, col = ep15$Col, pch = 20, cex = 0.75)
+
+ep15.model <- bioclim(x = bioclim.data, p = ep15.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2009")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep15.xy$longitude, ep15.xy$latitude, col = ep15$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP16
+ep16 <- filter(peri.filtered, EPISODE == "16")
+ep16.xy <- ep16[, c("longitude", "latitude")] 
+color.ep16 <- subset(ep16, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep16$MACALCAL, ep16$MACALCAL, col = ep16$Col, pch = 20, cex = 0.75)
+
+ep16.model <- bioclim(x = bioclim.data, p = ep16.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2010")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep16.xy$longitude, ep16.xy$latitude, col = ep16$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP19
+ep19 <- filter(peri.filtered, EPISODE == "19")
+ep19.xy <- ep19[, c("longitude", "latitude")] 
+color.ep19 <- subset(ep19, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep19$MACALCAL, ep19$MACALCAL, col = ep19$Col, pch = 20, cex = 0.75)
+
+ep19.model <- bioclim(x = bioclim.data, p = ep19.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2011")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep19.xy$longitude, ep19.xy$latitude, col = ep19$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP20
+ep20 <- filter(peri.filtered, EPISODE == "20")
+ep20.xy <- ep20[, c("longitude", "latitude")] 
+color.ep20 <- subset(ep20, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep20$MACALCAL, ep20$MACALCAL, col = ep20$Col, pch = 20, cex = 0.75)
+
+ep20.model <- bioclim(x = bioclim.data, p = ep20.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2012")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep20.xy$longitude, ep20.xy$latitude, col = ep20$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP21
+ep21 <- filter(peri.filtered, EPISODE == "21")
+ep21.xy <- ep21[, c("longitude", "latitude")] 
+color.ep21 <- subset(ep21, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep21$MACALCAL, ep21$MACALCAL, col = ep21$Col, pch = 20, cex = 0.75)
+
+ep21.model <- bioclim(x = bioclim.data, p = ep21.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2013")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep21.xy$longitude, ep21.xy$latitude, col = ep21$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP22 (Lowest abundance ep for Mastogloia)
+ep22 <- filter(peri.filtered, EPISODE == "22")
+ep22.xy <- ep22[, c("longitude", "latitude")] 
+color.ep22 <- subset(ep22, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep22$MACALCAL, ep22$MACALCAL, col = ep22$Col, pch = 20, cex = 0.75)
+
+ep22.model <- bioclim(x = bioclim.data, p = ep22.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2014")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep22.xy$longitude, ep22.xy$latitude, col = ep22$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP23
+ep23 <- filter(peri.filtered, EPISODE == "23")
+ep23.xy <- ep23[, c("longitude", "latitude")] 
+color.ep23 <- subset(ep23, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep23$MACALCAL, ep23$MACALCAL, col = ep23$Col, pch = 20, cex = 0.75)
+
+ep23.model <- bioclim(x = bioclim.data, p = ep23.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2015")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep23.xy$longitude, ep23.xy$latitude, col = ep23$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP24
+ep24 <- filter(peri.filtered, EPISODE == "24")
+ep24.xy <- ep24[, c("longitude", "latitude")] 
+color.ep24 <- subset(ep24, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep24$MACALCAL, ep24$MACALCAL, col = ep24$Col, pch = 20, cex = 0.75)
+
+ep24.model <- bioclim(x = bioclim.data, p = ep24.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2016")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep24.xy$longitude, ep24.xy$latitude, col = ep24$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP25
+ep25 <- filter(peri.filtered, EPISODE == "25")
+ep25.xy <- ep25[, c("longitude", "latitude")] 
+color.ep25 <- subset(ep25, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep25$MACALCAL, ep25$MACALCAL, col = ep25$Col, pch = 20, cex = 0.75)
+
+ep25.model <- bioclim(x = bioclim.data, p = ep25.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2017")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep25.xy$longitude, ep25.xy$latitude, col = ep25$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+##EP26
+ep26 <- filter(peri.filtered, EPISODE == "26")
+ep26.xy <- ep26[, c("longitude", "latitude")] 
+color.ep26 <- subset(ep26, select = c(EPISODE, MACALCAL, MACALCAL.presence, Col)) #for QA/QC
+#plot(ep26$MACALCAL, ep26$MACALCAL, col = ep26$Col, pch = 20, cex = 0.75)
+
+ep26.model <- bioclim(x = bioclim.data, p = ep26.xy) # Build species distribution model
+# Predict presence from model
+predict.presence <- dismo::predict(object = bc.model, x = bioclim.data, ext = geographic.extent)
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Abundance and distribution of M. calcarea in Everglades: 2018")
+plot(predict.presence, add = TRUE) # Add model probabilities
+plot(wrld_simpl, add = TRUE, border = "grey5") # Redraw those country borders
+# Add original observations
+points(ep26.xy$longitude, ep26.xy$latitude, col = ep26$Col, pch = 20, cex = 0.75)
+box()
+legend("bottomleft",title="% Abundance", legend=c("0 - 10", "10 - 20", "20 - 30", "30 - 40", "40 - 50",
+                                                  "50 - 60", "60 - 70", "70 - 80", "80 - 90"), 
+       col=rbPal(9), pch=20) 
+
+
+
+######################################### END OF YEARLY CODE ##########################################
+
+# The below code is only applicable to the latest year, and is run with reservation because:
+#A) Bioclim is not year-specific, so yearly changes in distribution would not accurately correlate 
+# to the correct environmental conditions of that year, and would instead all be compared to 
+# the most recent year.
+#B) I highly suspect that bioclim does not have detailed-enough information on the 
+# environmental conditions of the internal Everglades (spatially or variable-wise)
+# to provide me with the level of specificity my model would require to get accurate results.
+#I would love to create such a model, but that would require importing my own values for things like
+# water level, conductivity, nutrient availability, etc.
+#C) Mastogloia is rarely totally absent from areas; 
+#its abundance may fall to or beneath 1% abundance within a sample, but it's still present. 
+#The model uses presence/absence information rather than abundance to predict range,
+#and it's a general principle of algae that they're distributed everywhere by wind and fowl,
+#so I don't think it's as rewarding to analyze its presence over time.
+
+
+predicted.peri <- ep26 %>%
+  filter(MACALCAL.presence == "1")
+predicted.peri.xy  <- predicted.peri[, c("longitude", "latitude")]
+
+
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "/Users/tshan018/Downloads/wc2-5", 
+                        pattern = "*.bil$", 
+                        full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Randomly sample points (same number as our observed points)
+background <- randomPoints(mask = mask,     # Provides resolution of sampling points
+                           n = nrow(predicted.peri.xy),      # Number of random points
+                           ext = geographic.extent, # Spatially restricts sampling
+                           extf = 1.25)             # Expands sampling a little bit
+head(background)
+
+# Plot the base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Presence and pseudo-absence points")
+
+# Add the background points
+points(background, col = "grey30", pch = 1, cex = 0.75)
+
+# Add the observations
+points(x = predicted.peri.xy$longitude, 
+       y = predicted.peri.xy$latitude, 
+       col = "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+
+box()
+
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+group.presence <- kfold(x = predicted.peri.xy, k = 5) # kfold is in dismo package
+
+head(group.presence)
+
+# Should see even representation in each group
+table(group.presence)
+
+# Separate observations into training and testing groups
+presence.train <- predicted.peri.xy[group.presence != testing.group, ]
+presence.test <- predicted.peri.xy[group.presence == testing.group, ]
+
+# Repeat the process for pseudo-absence points
+group.background <- kfold(x = background, k = 5)
+background.train <- background[group.background != testing.group, ]
+background.test <- background[group.background == testing.group, ]
+
+# Build a model using training data
+bc.model <- bioclim(x = bioclim.data, p = presence.train)
+
+# Predict presence from model (same as previously, but with the update model)
+predict.presence <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data, 
+                                   ext = geographic.extent)
+
+# Use testing data for model evaluation
+bc.eval <- evaluate(p = presence.test,   # The presence testing data
+                    a = background.test, # The absence testing data
+                    model = bc.model,    # The model we are evaluating
+                    x = bioclim.data)    # Climatic variables for use by model
+
+# Determine minimum threshold for "presence"
+bc.threshold <- threshold(x = bc.eval, stat = "spec_sens")
+
+predict.presence > bc.threshold
+
+###ALRIGHT RUN THE MODEL
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Predicted range distribution of M. calcarea")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+points(x = predicted.peri.xy$longitude, 
+       y = predicted.peri.xy$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.75)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+box()
+legend("bottomleft", legend=c("Presence", "Absence"), 
+       col=c("olivedrab", "grey95"), pch=19) 
+
+
+
+
+```
+
+
+
+
+
+
+# INTRODUCTION
+
+  The Florida Everglades is the largest karstic wetland in the world, and its massive expanse of ecosystem types provide a home, resources, and ecosystem services for not only the species within it but also for the surrounding coastal zones and the people and economy of Southern Florida (Gaiser et al. 2012). Over the course of the last century however, the Everglades has been subject to severe destruction and degradation due to the encroachment of agricultural and urban development: approximately 50 percent of the original extent of the Everglades has been destroyed by terraforming or drainage, and the remainder has been severely impacted by alterations to water flow and the intrusion of nutrient runoff and other pollutants, as well as other anthropogenic stressors (USGS 1999; Gaiser et al. 2012). In response to this degradation, in 2000 the state of Florida passed funding for the Comprehensive Everglades Restoration Plan (CERP), the largest and most expensive environmental restoration effort in history (RECOVER 2010).  CERP has been an active restoration effort since 2005, working to restore the functionality of the Everglades through reestablishment of historic flow regimes and mitigation of pollutant intrusion; it also has Monitoring and Assessment Plan (MAP) aspect, a monitoring network of biotic and abiotic factors which should be restored as a result of the restoration actions. The biotic and chemical variables of interest have been measured once per year since 2005 during the wet season, typically over the span of a month, at approximately 150 locations within the Everglades restoration and conservation areas. 
+  One of the major monitored biotic components of CERP is the periphyton, the mat-forming algal communities which act as both a critical ecosystem contributor and as environmental indicators of pollutants. The periphyton mats are a dominant primary producer within the Everglades, contributing approximately 50% of the total producer biomass and constituting the base of the Everglades food web (Browder 1994). Besides providing food resources, the periphyton are true ecosystem engineers: they are responsible for maintaining the pH, conductivity, oxygen concentration, and incredibly oligotrophic nutrient levels in the ambient water of the Everglades (Hagerthey et al. 2011). Their mucilaginous mats also allow soils to retain moisture during drydown, enabling peat retention and accumulation (Gaiser et al. 2012). These periphyton mats and their species composition are incredibly sensitive to elevated nutrient concentrations: an increase of ~5 micrograms of phosphorus per L above ambient (which is only ~3-7ug P/L to begin with) is enough to destroy the mats, causing a reduction of all the abovementioned functionality (Gaiser et al. 2005). This means that maintenance of low levels of nutrients in the water entering the Everglades is essential, but also means that the periphyton can serve as incredibly sensitive bioindicators of this pollution (La Hee and Gaiser 2012).
+  Within the periphyton mat community of organisms, the diatom species Mastogloia calcarea (Lee et al. 2014) is considered to be an essential and dominant member. M. calcarea is the species primarily responsible for the production of extracellular polysaccharides (EPS), the slimy carbon-based mucilage which holds the mats together, provides a niche home to the other periphyton species via protection from chemicals, predation and desiccation, and provides the main source of carbon for consumption by the bacterial periphyton community members (Gaiser et al. 2010; Lee et al. 2014; Lee 2014). A high percent abundance of M. calcarea within the diatom assemblage (greater than 50%, up to 90%) is considered indicative of a healthily functioning periphyton mat. For these reasons, M. calcarea has been the focus of the following analysis of species distribution and abundance.
+
+# METHODS
+
+  CERP MAP periphyton sampling locations span a series of water conservation areas (WCA-1, 2, 3) and the Everglades National Park boundaries (dark green areas, Fig.1). Collection of CERP data occurred from 2005 to 2018 with sampling happening once per year in the wet season, typically spanning the month of October. Within each sampling season, collection of biological and abiotic variables are taken in triplicate sub-samples at a random point within each of approximately 150 Primary Sampling Unit (PSU) plots whose locations remain fixed across years. Periphyton sample processing,  species analysis, and initial database management was done by the Gaiser lab. 
+```{r, out.width = "400px", echo=FALSE}
+knitr::include_graphics("/Users/tshan018/Desktop/CERP.map.png")
+```
+ 
+  Fig. 1: Map of the Florida Everglades, designated by conservation region and indigenous land.  CERP MAP areas are regions in dark green.
+  
+  
+  
+  All subsequent data processing and analysis was conducted in R (R core team, 2020) To reduce potential sampling bias, the CERP periphyton dataset was filtered to only include those PSUs which were sampled for at least 12 of the 14 total sampling seasons; this removes the influence of areas which were sampled more intensely at the beginning of the project and whose sites may have contained disproportionately greater or fewer abundances of particular species. 
+  An initial exploration of variables and species of interest included ranking species by greatest percent abundance, averaged over all PSUs, for each sampling episode. Four species which were commonly most abundant across episodes were selected for further analysis: Mastogloia calcarea, Encyonema evergladianum, Brachysira microcephala, and Fallacia sp. The percent abundance of these species over time was graphed to look for trends over time (Fig. 2). Following this, the percent abundances of the four species of interest were plotted against select environmental variables of interest including water conductivity, phosphorus, and pH in order to look for species which might exhibit strongest linear correlation and be best candidates for further model analysis. To highlight potential spatial trends, plot points were colored by region and analyzed for clumping (Fig. 3).  Ultimately M. calcarea was selected as a best candidate for further analysis, based on the indication of strong temporal and spatial trends and environmental response from the aforementioned analyses, and due to its heightened importance as an ecosystem engineer. 
+    Mapping and model creation for species abundance and distribution was accomplished using the “dismo” R package for environmental spatial data and location suitability modeling (Hijmans et al. 2017).  Distribution and relative abundance of M. calcarea was mapped for all years in order to visualize trends in spatial and temporal patterning. To better visualize the pattern across years, these map images were sequentially processed into a .gif file format (Fig. 4). Predictive modeling of the full range of M. calcarea was accomplished using 2018 CERP locations of confirmed M. calcarea presence (20% of data used to train the model), randomly generated pseudo-absence points, and the Worldclim data for location-specific environmental conditions to predict range distribution of M. calcarea (Fig. 5).  Predictive range modeling was restricted to the 2018 CERP data because the Worldclim data used for the model does not have a temporal component, rendering prior year’s CERP data incompatible for this purpose.
+
+
+# RESULTS
+
+  Linear models for the changes in average proportional abundance over time were statistically significant for all species but Brachysira (Fig. 2 and Table 1). The directional shifts in abundance over time indicate a strong temporal component to the variability in species abundance.
+  
+  Scatter plots of M. calcarea proportional abundance versus environmental variables including water electrical conductivity, Phosphorus per gram biomass, and water pH do not display linear relationships between species abundance and environmental gradients.  Instead, strong patternation indicative of environmental filtering is displayed (Fig. 3). M. calcarea growth is clearly constrained below ~250 uS/cm (conductivity), and below a pH of ~6.3.  Suprisingly, concentration of phosphorus in biomass did not seem to constrain species percent abundance. Coloration of regional areas reveals distinct clumping patterns for some regions and shared distribution for others, suggesting that a spatial component may be a driving factor in the variability of species abundance.
+  
+  Mapping of M. calcarea percent abundance over time and space (Fig. 4) reveals that both spatial and temporal autocorrelation is likely present. 
+  
+  Predictive modeling for the current spatial range of M. calcarea (Fig. 5) displays that M. calcarea is likely limited to the specific environmental conditions present in the Everglades. 
+  
+  
+
+ 
+
+```{r, echo=FALSE}
+# Here, I plot % abundance of some of the most abundant spp over time (as measured by Episode)
+par(mfrow=c(1,1))
+
+ggplot(M.calcarea, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Mastogloia Proportional Abundance", 
+       y="Mastogloia % Abundance", x="Sampling Episode")
+
+ggplot(E.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Encyonema Proportional Abundance", 
+       y="Encyonema % Abundance", x="Sampling Episode")
+
+ggplot(B.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Brachysira Proportional Abundance", 
+       y="Brachysira % Abundance", x="Sampling Episode")
+
+ggplot(F.spp, aes(x=episode.ranked, y=Mean.spp)) + geom_point() + geom_smooth(method="lm") + 
+  labs(title="Sampling Season vs Fallacia Proportional Abundance", 
+       y="Fallacia % Abundance", x="Sampling Episode")
+
+```
+
+Fig. 2:  Change in the average species percent abundance within the total community over time, marked as once-per-year sampling episode, for the four most abundant diatom species. See Table 1 for statistical details.
+
+
+```{r, echo=FALSE}
+lm.results
+```
+
+Table 1: Summary statistics of linear models from Fig. 2 of the average species percent abundance over time, measured by episode rank.  All models are stastically significant (p<.05) except for the model lm.B, for Brachysira.  
+
+
+```{r, echo=FALSE}
+par(mfrow=c(1,1))
+# Mastogloia percent abundance vs various variables:
+
+### Conductivity
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point() + ylim(0, 100) + xlim(0, 1000) +
+   labs(title="Mastogloia Percent Abundance vs Conductivity", 
+       y="Mastogloia % Abundance", x="Water electrical conductivity (microsiemens per centimeter)")
+#and with color by region:
+ggplot(peri.ranked, aes(x=SURFACE_WATER_COND_US_PER_CM, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000) +
+   labs(title="Mastogloia Percent Abundance vs Conductivity, Colored by Region", 
+       y="Mastogloia % Abundance", x="Water electrical conductivity (microsiemens per centimeter)")
+
+### Phosphorus
+ggplot(peri.ranked, aes(x=PERI_TP_UG_PER_G_DRY, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(0, 1000) +
+   labs(title="Mastogloia Percent Abundance vs Phosphorus", 
+       y="Mastogloia % Abundance", x="Total Phsophorus, micrograms per gram dry weight biomass")
+
+### pH
+# Mastagloia
+ggplot(peri.ranked, aes(x=SURFACE_WATER_PH, y=MACALCAL)) +
+  geom_point(aes(colour = factor(REGION))) + ylim(0, 100) + xlim(4.5, 9) +
+   labs(title="Mastogloia Percent Abundance vs Conductivity", 
+       y="Mastogloia % Abundance", x="Ambient water pH")
+```
+
+Fig. 3: Mastogloia percent abundance within the total algal community, compared to (A, B) conductivity, (C) Phosphorus, and (D) pH. Regions of CERP are denoted via color: LOX = Loxahatchee, also denoted as WC1 in Fig. 1. SRS = Shark river Slough and TSL = Taylor Slough, which are components of the Everglades Conservation Area marked on Fig. 1.  Note the consistency of nonlinear trends, strong environmental filtering, and regional clumping across all environmental variables. 
+
+
+```{r, out.width = "400px", echo=FALSE}
+knitr::include_graphics("/Users/tshan018/Documents/CERP Analysis/M. calcarea abundance over time.gif")
+```
+
+Fig. 4: Change in Percent Abundance and Distribution of Mastogloia calcarea in the Everglades over time. Note the regional synchrony of change between districted water conservation areas. This .gif file will not properly display in a PDF format, but should be accessible in HTML format.
+
+
+```{r, echo=FALSE}
+###ALRIGHT RUN THE MODEL
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Predicted range distribution of M. calcarea")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+points(x = predicted.peri.xy$longitude, 
+       y = predicted.peri.xy$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.75)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+box()
+legend("bottomleft", legend=c("Presence", "Absence"), 
+       col=c("olivedrab", "grey95"), pch=19) 
+```
+
+Fig. 5: Modeled predicted range of M. calcarea in green. "+" are points of presence. Note that the model successfully excludes the Loxahatchee region (WCA-1) from its predicted distribution. 
+
+
+The scope of this work is largely qualitative and visual, not quantitative. As such, apart from the initial linear model analyses there are no statistical analyses performed on the map or model outputs. Given the results of this study, it would be prudent to perform follow-up analyses of the spatial autocorrelation of species abundance, but that analysis is not included in the scope of this report.
+
+
+
+# DISCUSSION
+
+The significantly increasing and decreasing trends in species proportional abundance (Fig. 2, Table 1) are indicative of an ongoing directional shift in community composition for the Everglades periphyton. While it is impossible to assert from this analysis if these changes are "good" or "bad", it may be inferred that these trends could be due to either the successful restoration efforts of the CERP project to bring conditions back to their historic norm, or oppositely, could be due to continued anthropogenic pressures pushing the Evergaldes system farther away from its historic norm.  
+
+The strong patternation of environmental filtering displayed by M. calcarea (Fig. 3) in conjunction with the regional correlation its abundance displays (Fig. 3, Fig. 4) provide support for the notion that changes in environmental conditions and the human management of those conditions is responsible for the patterns of abundance and range distribution for M. calcarea.  The validation of these ideas and of the degree of regional autocorrelation is not possible though these qualitative visual analyses: my assessment of regional trends are "eyeballed" and require further analysis.  With that in mind, however, some trends bear merit and further discussion.  
+  Firstly, the Loxahatchee (WCA-1) area is an outlier and an inhospitable place for M. calcarea growth.  This is likely due in part to the region's low pH, but cannot be entirely explained by this factor alone, since even the samples taken in Loxahatchee with a pH above 6.3 do not display increased abundance (Fig. 3d). Loxahatchee's low conductivity could also be a responsible factor for its no-abundance status, since conductivity is largely reflectant of the area's calcium ions and calcium carbonate is an essential supplier of material needed for periphyton mat creation. However, this metric may be correlated with pH due to the buffering capacity of CaCO3. 
+  Scrutiny of Fig. 4 shows that yearly changes in M. calcarea proportional abundance occur with widespread, regional, and stochastic elements. Widespread changes, such as wholesale decreases in abundance during 2017 and rebound in 2018 may be due to climate conditions such as yearly rainfall or temperature. Regional changes, most notably those occurring locally in the central and south portions of the species range during 2009-2011 and in 2016, are more likely to be due to anthropogenic manipulation of the system. Alterations to water level, nutrient imput, or other factors may be responsible. To the extent that these regional patterns alter species abundance and push local populations into the lowest category of abundance (<10%), these spatio-temporal changes could be considered alterations to the range distribution of the species.
+  
+  The predictive model of M. calcarea range distribution was only run with the data from the latest sampling episode, 2018, because the Worldclim data used to build the model does not have a temporal component and so it would not make sense to compare different years' data in a model that is not time sensitive.  Perhaps unsurprisingly, the model predicts that M. calcarea's range is limited to the area sampled. This is likely partially because the Everglades is a unique environment and so, since the model was provided with no positive samples outside the Everglades habitat, the model predicted that its range is confined to the Everglades.  Additionally, CERP sampling of periphyton is supposed to be comprehensive, so it makes some sense that the range of CERP samples is representitive of the range of the periphyton mat-forming community, of which M. calcarea is an integral part.  Perhaps the largest indicator of success for the model was that it successfully excluded the Loxahatchee area from its predicted range, even though samples were collected in the area. Despite a few positive samples of species presence over the years, the area certainly would not be considered a real part of M. calcarea's range, and so the model's exclusion of the area is a testament to its sensitivity and the robustness of the background environmental data in Worldclim.
+
+Future steps for this analysis should include deeper analysis of the regional and chemical patterns correlating to species percent abundance, in order to elucidate the specific drivers of community change at play. To this end, a spatiotemporal model which can import the environmental correlates and distance data from the CERP database would be of high interest. A quantitative analysis of spatial and temporal synchrony would be best, but in lieu of those aspirations, a Boosted Regression Tree model may be a best next step. In addition to furhter model creation, I believe that the visual tool for understanding shifts in abundance over time and space (Fig. 4) could be readily applied to other species of interest within the CERP dataset. 
+
+
+
+# LITERATURE CITED
+
+Browder J, Gleason P, Swift D. 1994. Periphyton in the Everglades: Spatial Variation, Environmental 
+  Correlates, and Ecological Implications. Ch. 16 in Everglades: The Ecosystem and Its 
+  Restoration, edited by Davis and Ogden, 1994.
+
+Gaiser E, La Hée J, Tobias F. and Wachnicka A. (2010) Mastogloia smithii var lacustris Grun.: a 
+  structural engineer of calcareous mats in karstic subtropical wetlands. Proceedings of the 
+  Academy of Natural Sciences of Philadelphia, 160(1):99-112.
+
+Gaiser E, Trexler J, Richards J, Childers D, Lee D, Edwards A, Scinto L, Jayachandran K, Noe 
+  G, Jones R. (2005) Cascading ecological effects of low-level phosphorus enrichment in the 
+  Florida everglades. Journal of Environmental Quality, 34(2):717-723.
+
+Gaiser E, Trexler J, Wetzel P.  (2012) The Florida Everglades.  Ch. 17 in Wetland Habitats of North 
+  America: Ecology and Conservation Concerns, edited by D. Batzer and A. Baldwin, 2012. 
+
+Hagerthey S, Bellinger B, Wheeler K, Gantar M, and Gaiser E. (2011) Everglades Periphyton: A 
+  Biogeochemical Perspective. Critical Reviews in Environmental Science and Technology, 
+  41(S1):309–343.
+
+Hijmans J, Phillips S, Leathwick J, and Elith J. (2011). Package ‘dismo’. Available online at: 
+  http://cran.r-project.org/web/packages/dismo/index.html.
+
+La Hée J. and Gaiser E. (2012) Benthic diatom assemblages as indicators of water quality in the 
+  Everglades and three tropical karstic wetlands. Freshwater Science, 31: 205–221.
+
+Lee S, Gaiser E, Van de Vijver B, Edlund M, and Spaulding S. (2014) Morphology and typification of 
+  Mastogloia smithii and M. lacustris, with descriptions of two new species from the Florida 
+  Everglades and the Caribbean region. Diatom Research. Volume 29, Issue 4.
+
+Lee S. (2014) Mastogloia calcarea. In Diatoms of North America. Retrieved April 01, 2020, from 
+  https://diatoms.org/species/mastogloia_calcarea 
+                    
+R Core Team (2017). R: A language and environment for statistical computing. R Foundation for Statistical 
+  Computing, Vienna, Austria. URL https://www.R-project.org/.
+
+RECOVER (2010) 2009 comprehensive Everglades restoration plan system status report. SFWMD, West 
+  Palm Beach, Fl. 
+
+USGS. Editors: Galloway D, Jones D, Ingebritsen S. (1999) Land Subsidence in the United States. 
+  Circular 1182.
+
+South Florida Water Management District. South Florida Environmental Report—Highlights. Retrieved 
+  online, April 02, 2020, from 
+  https://issuu.com/southfloridawatermanagement/docs/2016_sfer_highlights_final?e=4207603/33817547
+
+
+
+
